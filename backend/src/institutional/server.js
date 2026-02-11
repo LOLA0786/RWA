@@ -71,3 +71,11 @@ app.get("/sla", (req, res) => {
 app.listen(process.env.PORT || 3000, () => {
   console.log("Stablecoin Settlement Kernel running");
 });
+
+const { anchorLatestAudit } = require("../monitoring/anchorService");
+
+// Anchor every 5 minutes
+setInterval(() => {
+  anchorLatestAudit().catch(console.error);
+}, 5 * 60 * 1000);
+
