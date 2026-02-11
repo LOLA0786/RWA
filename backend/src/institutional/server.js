@@ -1,6 +1,10 @@
 const express = require("express");
 require("dotenv").config();
 
+const { checkCompliance } = require("../compliance/complianceEngine");
+const { getReserveStatus, mint, burn } = require("../settlement/reserveEngine");
+const { appendAudit, getAudits } = require("../monitoring/auditStore");
+
 const app = express();
 app.use(express.json());
 
@@ -12,19 +16,62 @@ function auth(req, res, next) {
 }
 
 app.post("/stablecoin/mint", auth, (req, res) => {
-  return res.json({
-    status: "APPROVED",
-    action: "MINT",
-    audit_id: Date.now().toString(),
-  });
+  const { address, amount } = req.body;
+
+  const compliance = checkCompliance(address);
+  const reserve = getReserveStatus();
+
+  if (!compliance.allowed) {
+    return res.json({ status: "BLOCKED", reason: compliance.reason });
+  }
+
+  if (!reserve.fullyBacked) {
+    return res.json({ status: "BLOCKED", reason: "Reserve violation" });
+  }
+
+  mint(amount);
+
+  const audit = {
+    type: "MINT",
+    address,
+    amount,
+    timestamp: new Date().toISOString()
+  };
+
+  appendAudit(audit);
+
+  res.json({ status: "APPROVED", audit });
 });
 
 app.post("/stablecoin/burn", auth, (req, res) => {
-  return res.json({
-    status: "APPROVED",
-    action: "BURN",
-    audit_id: Date.now().toString(),
-  });
+  const { address, amount } = req.body;
+
+  const compliance = checkCompliance(address);
+
+  if (!compliance.allowed) {
+    return res.json({ status: "BLOCKED", reason: compliance.reason });
+  }
+
+  burn(amount);
+
+  const audit = {
+    type: "BURN",
+    address,
+    amount,
+    timestamp: new Date().toISOString()
+  };
+
+  appendAudit(audit);
+
+  res.json({ status: "APPROVED", audit });
+});
+
+app.get("/stablecoin/reserve", auth, (req, res) => {
+  res.json(getReserveStatus());
+});
+
+app.get("/stablecoin/audits", auth, (req, res) => {
+  res.json(getAudits());
 });
 
 app.get("/health", (req, res) => {
