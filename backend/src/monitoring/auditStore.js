@@ -27,6 +27,7 @@ function appendAudit(entry) {
 
   const payload = JSON.stringify({
     ...entry,
+    region: process.env.REGION || "unknown",
     previousHash
   });
 
@@ -35,6 +36,7 @@ function appendAudit(entry) {
 
   const finalEntry = {
     ...entry,
+    region: process.env.REGION || "unknown",
     previousHash,
     hash,
     signature
