@@ -1,57 +1,48 @@
-const fs = require("fs");
-const path = require("path");
 const crypto = require("crypto");
+const { query } = require("../db/postgres");
 
-const AUDIT_FILE = path.join(__dirname, "../../audit/audit-log.json");
 const SECRET = process.env.AUDIT_SECRET || "default_secret";
 
-function hashEntry(data) {
+function sha256(data) {
   return crypto.createHash("sha256").update(data).digest("hex");
 }
 
-function signHash(hash) {
-  return crypto
-    .createHmac("sha256", SECRET)
-    .update(hash)
-    .digest("hex");
+function sign(hash) {
+  return crypto.createHmac("sha256", SECRET).update(hash).digest("hex");
 }
 
-function appendAudit(entry) {
-  let logs = [];
+async function appendAudit(entry) {
+  const prev = await query(
+    "SELECT hash FROM audit_logs ORDER BY id DESC LIMIT 1"
+  );
 
-  if (fs.existsSync(AUDIT_FILE)) {
-    logs = JSON.parse(fs.readFileSync(AUDIT_FILE));
-  }
+  const previousHash = prev.rows[0]?.hash || "GENESIS";
 
-  const previousHash = logs.length > 0 ? logs[logs.length - 1].hash : "GENESIS";
+  const payload = JSON.stringify({ ...entry, previousHash });
+  const hash = sha256(payload);
+  const signature = sign(hash);
 
-  const payload = JSON.stringify({
-    ...entry,
-    region: process.env.REGION || "unknown",
-    previousHash
-  });
+  const result = await query(
+    `INSERT INTO audit_logs(type, address, amount, region, previous_hash, hash, signature)
+     VALUES($1,$2,$3,$4,$5,$6,$7)
+     RETURNING *`,
+    [
+      entry.type,
+      entry.address,
+      entry.amount,
+      process.env.REGION || "unknown",
+      previousHash,
+      hash,
+      signature
+    ]
+  );
 
-  const hash = hashEntry(payload);
-  const signature = signHash(hash);
-
-  const finalEntry = {
-    ...entry,
-    region: process.env.REGION || "unknown",
-    previousHash,
-    hash,
-    signature
-  };
-
-  logs.push(finalEntry);
-
-  fs.writeFileSync(AUDIT_FILE, JSON.stringify(logs, null, 2));
-
-  return finalEntry;
+  return result.rows[0];
 }
 
-function getAudits() {
-  if (!fs.existsSync(AUDIT_FILE)) return [];
-  return JSON.parse(fs.readFileSync(AUDIT_FILE));
+async function getAudits() {
+  const result = await query("SELECT * FROM audit_logs ORDER BY id DESC LIMIT 100");
+  return result.rows;
 }
 
 module.exports = { appendAudit, getAudits };
