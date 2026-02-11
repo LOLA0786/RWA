@@ -4,6 +4,7 @@ require("dotenv").config();
 const { checkCompliance } = require("../compliance/complianceEngine");
 const { getReserveStatus, mint, burn } = require("../settlement/reserveEngine");
 const { appendAudit, getAudits } = require("../monitoring/auditStore");
+const { recordRequest, getStats } = require("../monitoring/slaMonitor");
 
 const app = express();
 app.use(express.json());
@@ -15,7 +16,21 @@ function auth(req, res, next) {
   next();
 }
 
-app.post("/stablecoin/mint", auth, (req, res) => {
+function wrapHandler(handler) {
+  return async (req, res) => {
+    const start = Date.now();
+    try {
+      await handler(req, res);
+      recordRequest(Date.now() - start, false);
+    } catch (err) {
+      recordRequest(Date.now() - start, true);
+      console.error(err);
+      res.status(500).json({ error: "Internal error" });
+    }
+  };
+}
+
+app.post("/stablecoin/mint", auth, wrapHandler((req, res) => {
   const { address, amount } = req.body;
 
   const compliance = checkCompliance(address);
@@ -31,51 +46,26 @@ app.post("/stablecoin/mint", auth, (req, res) => {
 
   mint(amount);
 
-  const audit = {
+  const audit = appendAudit({
     type: "MINT",
     address,
     amount,
     timestamp: new Date().toISOString()
-  };
-
-  appendAudit(audit);
+  });
 
   res.json({ status: "APPROVED", audit });
-});
+}));
 
-app.post("/stablecoin/burn", auth, (req, res) => {
-  const { address, amount } = req.body;
-
-  const compliance = checkCompliance(address);
-
-  if (!compliance.allowed) {
-    return res.json({ status: "BLOCKED", reason: compliance.reason });
-  }
-
-  burn(amount);
-
-  const audit = {
-    type: "BURN",
-    address,
-    amount,
-    timestamp: new Date().toISOString()
-  };
-
-  appendAudit(audit);
-
-  res.json({ status: "APPROVED", audit });
-});
-
-app.get("/stablecoin/reserve", auth, (req, res) => {
+app.get("/stablecoin/reserve", auth, wrapHandler((req, res) => {
   res.json(getReserveStatus());
-});
+}));
 
-app.get("/stablecoin/audits", auth, (req, res) => {
+app.get("/stablecoin/audits", auth, wrapHandler((req, res) => {
   res.json(getAudits());
-});
+}));
 
-app.get("/health", (req, res) => {
-  res.json({ status: "OK" });
+app.get("/sla", (req, res) => {
+  res.json(getStats());
 });
 
 app.listen(process.env.PORT || 3000, () => {
